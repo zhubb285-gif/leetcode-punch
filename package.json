@@ -1,11 +1,14 @@
 {
   "name": "leetcode-punch-platform",
   "version": "1.0.0",
-  "description": "LeetCode 双人对决打卡平台（零依赖 Node 后端）",
+  "description": "LeetCode 双人对决打卡平台（Node 后端，支持 Vercel serverless + KV）",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js"
+  },
+  "dependencies": {
+    "@vercel/kv": "^1.0.1"
   },
   "engines": {
     "node": ">=18"

@@ -16,6 +16,15 @@ const ROOT = __dirname;
 const DATA_DIR = path.join(ROOT, "data");
 const DB_FILE = path.join(DATA_DIR, "db.json");
 
+/* ---------------- 存储后端：Vercel KV（云端）或本地文件（开发） ---------------- */
+// Vercel 绑定 KV store 后会自动注入 KV_REST_API_URL / KV_REST_API_TOKEN，
+// 此时用 @vercel/kv 做持久化；本地无该环境变量则回退到 data/db.json 文件。
+let kvClient = null;
+if (process.env.KV_REST_API_URL) {
+  try { kvClient = require("@vercel/kv"); } catch (e) { kvClient = null; }
+}
+const USE_KV = !!kvClient;
+
 /* ---------------- 存储 ---------------- */
 let db = {
   users: [],        // {id, name, nameLower, salt, passHash, leetcodeId, createdAt, lastLoginAt}
@@ -25,17 +34,22 @@ let db = {
   syncedIds: {}     // userId -> [已入库的力扣提交 id]
 };
 
-function loadDb() {
+async function loadDb() {
+  if (USE_KV) {
+    try { const d = await kvClient.get("db"); if (d) db = Object.assign(db, d); return; }
+    catch (e) { console.error("从 KV 读取数据失败，回退空库:", e.message); }
+  }
   try {
     if (fs.existsSync(DB_FILE)) db = Object.assign(db, JSON.parse(fs.readFileSync(DB_FILE, "utf8")));
   } catch (e) { console.error("读取数据失败，使用空库", e.message); }
 }
 let saveTimer = null;
 function saveDb() {
-  // 防抖落盘
+  // 防抖落盘 / 落 KV
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => {
+  saveTimer = setTimeout(async () => {
     try {
+      if (USE_KV) { await kvClient.set("db", db); return; }
       if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
       fs.writeFileSync(DB_FILE, JSON.stringify(db));
     } catch (e) { console.error("保存数据失败", e.message); }
@@ -88,22 +102,27 @@ function publicUser(u) {
 /* ---------------- 力扣 GraphQL 代理（leetcode.cn） ---------------- */
 const LC_URL = "https://leetcode.cn/graphql/";
 
-async function lcFetch(query, variables) {
-  const res = await fetch(LC_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Referer": "https://leetcode.cn/",
-      "Origin": "https://leetcode.cn",
-      "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
-      "Accept": "application/json"
-    },
-    body: JSON.stringify({ query, variables })
-  });
-  if (!res.ok) throw new Error("力扣接口 HTTP " + res.status);
-  const data = await res.json();
-  if (data.errors) throw new Error("力扣接口错误: " + (data.errors[0]?.message || "unknown"));
-  return data.data;
+async function lcFetch(query, variables, timeout = 8000) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeout);
+  try {
+    const res = await fetch(LC_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Referer": "https://leetcode.cn/",
+        "Origin": "https://leetcode.cn",
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+        "Accept": "application/json"
+      },
+      body: JSON.stringify({ query, variables }),
+      signal: ctrl.signal
+    });
+    if (!res.ok) throw new Error("力扣接口 HTTP " + res.status);
+    const data = await res.json();
+    if (data.errors) throw new Error("力扣接口错误: " + (data.errors[0]?.message || "unknown"));
+    return data.data;
+  } finally { clearTimeout(t); }
 }
 
 async function syncUser(user) {
@@ -526,16 +545,18 @@ const ZH_SECTION = {
 /* 力扣题库 slug -> 中文题名（分页拉取，磁盘缓存） */
 const SLUGMAP_FILE = path.join(DATA_DIR, "slugmap.json");
 let slugTitleMap = null;
+let slugMapComplete = false;
 
 async function buildSlugMap() {
-  if (slugTitleMap) return slugTitleMap;
-  try {
-    if (fs.existsSync(SLUGMAP_FILE)) {
-      slugTitleMap = JSON.parse(fs.readFileSync(SLUGMAP_FILE, "utf8"));
-      return slugTitleMap;
-    }
-  } catch (e) { /* 重建 */ }
-  const map = {};
+  if (slugTitleMap && slugMapComplete) return slugTitleMap;
+  // 1) 恢复已有映射（KV / 本地文件），支持增量续拉
+  let base = null;
+  if (USE_KV) {
+    try { base = await kvClient.get("slugmap"); } catch (e) { /* 重建 */ }
+  } else if (fs.existsSync(SLUGMAP_FILE)) {
+    try { base = JSON.parse(fs.readFileSync(SLUGMAP_FILE, "utf8")); } catch (e) { /* 重建 */ }
+  }
+  const map = Object.assign({}, base || {}, slugTitleMap || {});
   const Q = `query problemsetQuestionList($categorySlug: String, $limit: Int, $skip: Int, $filters: QuestionListFilterInput) {
     problemsetQuestionList(categorySlug: $categorySlug, limit: $limit, skip: $skip, filters: $filters) {
       total
@@ -544,29 +565,34 @@ async function buildSlugMap() {
   }`;
   const LIMIT = 100;
   let skip = 0, total = Infinity;
-  while (skip < total) {
-    const batch = [];
-    for (let i = 0; i < 5 && skip + i * LIMIT < total; i++) {
-      batch.push(lcFetch(Q, { categorySlug: "", limit: LIMIT, skip: skip + i * LIMIT, filters: {} }));
-    }
-    const results = await Promise.all(batch);
-    for (const d of results) {
-      const ql = d && d.problemsetQuestionList;
-      if (!ql) continue;
-      total = ql.total;
-      (ql.questions || []).forEach((q) => {
-        const cn = q.titleCn || q.title;
-        if (cn) map[q.titleSlug] = cn;
-      });
-    }
-    skip += batch.length * LIMIT;
-  }
-  slugTitleMap = map;
+  const deadline = Date.now() + 8000; // serverless 下函数 10s 超时，预留余量
   try {
-    if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-    fs.writeFileSync(SLUGMAP_FILE, JSON.stringify(map));
+    while (skip < total && Date.now() < deadline) {
+      const batch = [];
+      for (let i = 0; i < 5 && skip + i * LIMIT < total && Date.now() < deadline; i++) {
+        batch.push(lcFetch(Q, { categorySlug: "", limit: LIMIT, skip: skip + i * LIMIT, filters: {} }));
+      }
+      const results = await Promise.all(batch);
+      for (const d of results) {
+        const ql = d && d.problemsetQuestionList;
+        if (!ql) continue;
+        total = ql.total;
+        (ql.questions || []).forEach((q) => {
+          const cn = q.titleCn || q.title;
+          if (cn) map[q.titleSlug] = cn;
+        });
+      }
+      skip += batch.length * LIMIT;
+    }
+  } catch (e) { console.warn("题库映射拉取中断:", e.message); }
+  slugTitleMap = map;
+  if (skip >= total) slugMapComplete = true;
+  // 持久化（KV 或文件）
+  try {
+    if (USE_KV) await kvClient.set("slugmap", map);
+    else { if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true }); fs.writeFileSync(SLUGMAP_FILE, JSON.stringify(map)); }
   } catch (e) { /* 忽略 */ }
-  console.log(`题库中文题名映射已构建：${Object.keys(map).length} 条`);
+  console.log(`题库中文题名映射：${Object.keys(map).length} 条（${slugMapComplete ? "已完整" : "续拉中"}）`);
   return map;
 }
 
@@ -584,12 +610,16 @@ function zhBookTitle(rawTitle, relPath, slugMap) {
   return t;
 }
 
-async function bookFetch(url) {
-  const res = await fetch(url, {
-    headers: { "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36" }
-  });
-  if (!res.ok) throw new Error("HTTP " + res.status);
-  return res.text();
+async function bookFetch(url, timeout = 7000) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeout);
+  return fetch(url, {
+    headers: { "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36" },
+    signal: ctrl.signal
+  }).then((res) => {
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    return res.text();
+  }).finally(() => clearTimeout(t));
 }
 
 function stripTags(s) {
@@ -771,24 +801,35 @@ async function getZhPage(relPath) {
   if (bookCache.has(key)) return bookCache.get(key);
   if (zhInflight.has(key)) return zhInflight.get(key);
   const task = (async () => {
-    if (!fs.existsSync(ZH_CACHE_DIR)) fs.mkdirSync(ZH_CACHE_DIR, { recursive: true });
-    const hash = crypto_.createHash("sha1").update(relPath).digest("hex");
-    const cacheFile = path.join(ZH_CACHE_DIR, hash + ".html");
-    let zhHtml;
-    if (fs.existsSync(cacheFile)) {
-      zhHtml = fs.readFileSync(cacheFile, "utf8");
-    } else {
-      const orig = await bookPage(relPath);
-      zhHtml = await translateHtmlToChinese(orig.html);
-      // CJK 校验：翻译基本失败时（无中文字符）不写缓存，返回原文
-      if (!hasCJK(zhHtml) || (zhHtml === orig.html)) {
-        return { title: orig.title, path: relPath, source: BOOK_BASE + relPath + "/", html: orig.html, translated: false };
+    // 1) 读缓存：KV（云端持久）优先，其次本地磁盘
+    if (USE_KV) {
+      try { const c = await kvClient.get(key); if (c) return c; } catch (e) { /* 继续翻译 */ }
+    } else if (fs.existsSync(ZH_CACHE_DIR)) {
+      const hash = crypto_.createHash("sha1").update(relPath).digest("hex");
+      const cacheFile = path.join(ZH_CACHE_DIR, hash + ".html");
+      if (fs.existsSync(cacheFile)) {
+        const zhHtml = fs.readFileSync(cacheFile, "utf8");
+        const h1 = zhHtml.match(/<h1[^>]*>([\s\S]*?)<\/h1>/);
+        const title = h1 ? stripTags(h1[1]).replace(/#$/, "").trim() : relPath.split("/").pop();
+        const result = { title, path: relPath, source: BOOK_BASE + relPath + "/", html: zhHtml, translated: true };
+        bookCache.set(key, result);
+        return result;
       }
-      try { fs.writeFileSync(cacheFile, zhHtml); } catch (e) { /* 忽略 */ }
+    }
+    // 2) 翻译并缓存
+    const orig = await bookPage(relPath);
+    const zhHtml = await translateHtmlToChinese(orig.html);
+    // CJK 校验：翻译基本失败时（无中文字符）缓存原文，避免反复重试
+    if (!hasCJK(zhHtml) || (zhHtml === orig.html)) {
+      const raw = { title: orig.title, path: relPath, source: BOOK_BASE + relPath + "/", html: orig.html, translated: false };
+      if (USE_KV) { try { await kvClient.set(key, raw); } catch (e) {} }
+      else { try { if (!fs.existsSync(ZH_CACHE_DIR)) fs.mkdirSync(ZH_CACHE_DIR, { recursive: true }); fs.writeFileSync(path.join(ZH_CACHE_DIR, crypto_.createHash("sha1").update(relPath).digest("hex") + ".html"), orig.html); } catch (e) {} }
+      return raw;
     }
     const h1 = zhHtml.match(/<h1[^>]*>([\s\S]*?)<\/h1>/);
     const title = h1 ? stripTags(h1[1]).replace(/#$/, "").trim() : relPath.split("/").pop();
     const result = { title, path: relPath, source: BOOK_BASE + relPath + "/", html: zhHtml, translated: true };
+    if (USE_KV) { try { await kvClient.set(key, result); } catch (e) {} }
     bookCache.set(key, result);
     return result;
   })();
@@ -916,8 +957,12 @@ function serveStatic(req, res, pathname) {
 }
 
 /* ---------------- 启动 ---------------- */
-loadDb();
-const server = http.createServer(async (req, res) => {
+// 数据加载（KV 或文件）。模块加载即触发，handler 内 await，确保首请求前就绪。
+const dbReady = loadDb();
+
+// serverless（Vercel）与本地通用的请求处理器
+async function handler(req, res) {
+  await dbReady;
   const url = new URL(req.url, "http://localhost");
   const pathname = decodeURIComponent(url.pathname);
   try {
@@ -927,12 +972,21 @@ const server = http.createServer(async (req, res) => {
     console.error("请求处理错误:", e);
     return sendJson(res, 500, { error: "服务器内部错误" });
   }
-});
-server.listen(PORT, () => {
-  console.log(`LeetCode 打卡平台已启动: http://localhost:${PORT}`);
-  console.log(`数据文件: ${DB_FILE}`);
-  // 启动 5 秒后开始后台全量预翻译书库（已缓存的页面会秒过）
-  setTimeout(() => {
-    prewarmBook().catch((e) => console.warn("预热任务异常:", e.message));
-  }, 5000);
-});
+}
+
+// 本地直接运行时才监听端口（Vercel 通过 api/index.js 导入本模块，不监听）
+if (require.main === module) {
+  dbReady.then(() => {
+    http.createServer(handler).listen(PORT, () => {
+      console.log(`LeetCode 打卡平台已启动: http://localhost:${PORT}`);
+      console.log(`存储后端: ${USE_KV ? "Vercel KV" : "本地文件 " + DB_FILE}`);
+      // 本地后台全量预翻译书库（云端走按需翻译 + KV 缓存，不需要预热）
+      if (!USE_KV) {
+        setTimeout(() => prewarmBook().catch((e) => console.warn("预热任务异常:", e.message)), 5000);
+      }
+    });
+  });
+}
+
+// 导出给 Vercel 的 serverless 函数使用
+module.exports = handler;
