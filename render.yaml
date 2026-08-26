@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: leetcode-punch
+    runtime: node
+    plan: free
+    branch: main
+    buildCommand: "echo 'no build needed (zero-dependency)'"
+    startCommand: "node server.js"
+    healthCheckPath: "/"
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
