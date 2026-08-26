@@ -167,6 +167,16 @@
             <button class="btn primary" id="btnPw">修改密码</button>
           </div>
         </div>
+
+        <div class="card">
+          <div class="card-head"><h2>数据备份</h2></div>
+          <p class="sync-note">免费云主机重部署会清空数据。定期点「导出数据」把账号、打卡记录、力扣绑定存到本地；需要时用「导入数据」一键恢复。</p>
+          <div class="pf-actions" style="margin-top:10px">
+            <button class="btn" id="btnExport">导出数据</button>
+            <button class="btn" id="btnImport">导入数据</button>
+            <input type="file" id="backupFile" accept="application/json,.json" style="display:none" />
+          </div>
+        </div>
       </div>
     </section>
   </main>

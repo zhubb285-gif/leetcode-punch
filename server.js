@@ -296,6 +296,38 @@ async function handleApi(req, res, pathname, query) {
     return sendJson(res, 200, { ok: true });
   }
 
+  /* ---- 导出数据（整库备份下载） ---- */
+  if (pathname === "/api/backup" && method === "GET") {
+    const payload = JSON.stringify(db);
+    const fname = "leetcode-backup-" + new Date().toISOString().slice(0, 10) + ".json";
+    res.writeHead(200, {
+      "Content-Type": "application/json; charset=utf-8",
+      "Content-Disposition": `attachment; filename="${fname}"`,
+      "Cache-Control": "no-store"
+    });
+    return res.end(payload);
+  }
+
+  /* ---- 导入数据（整库恢复） ---- */
+  if (pathname === "/api/restore" && method === "POST") {
+    const obj = await readBody(req);
+    if (!obj || !Array.isArray(obj.users)) {
+      return sendJson(res, 400, { error: "备份文件格式不正确" });
+    }
+    const merged = Object.assign(
+      { users: [], sessions: {}, records: {}, profiles: {}, syncedIds: {} },
+      obj
+    );
+    const meId = me.id;
+    const exists = merged.users.find((u) => u.id === meId);
+    if (!exists) return sendJson(res, 403, { error: "该备份不含当前账号，无法恢复" });
+    const oldToken = (req.headers["authorization"] || "").slice(7);
+    merged.sessions[oldToken] = { userId: meId, createdAt: nowStr() };
+    db = merged;
+    saveDb();
+    return sendJson(res, 200, { ok: true, token: oldToken, user: publicUser(exists) });
+  }
+
   /* ---- 手动打卡 ---- */
   if (pathname === "/api/records" && method === "POST") {
     const b = await readBody(req);

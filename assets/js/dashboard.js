@@ -564,6 +564,44 @@
         } catch (e) { toast(e.message, "err"); }
       });
     }
+
+    // 数据备份：导出 / 导入
+    const btnExport = $("#btnExport");
+    const btnImport = $("#btnImport");
+    const fileInput = $("#backupFile");
+    if (btnExport) btnExport.onclick = exportData;
+    if (btnImport) btnImport.onclick = () => fileInput && fileInput.click();
+    if (fileInput) fileInput.onchange = (e) => {
+      const f = e.target.files && e.target.files[0];
+      if (f) importData(f);
+      e.target.value = "";
+    };
+  }
+
+  async function exportData() {
+    try {
+      const res = await fetch("/api/backup", { headers: { Authorization: "Bearer " + TOKEN } });
+      if (!res.ok) throw new Error("导出失败");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "leetcode-backup-" + new Date().toISOString().slice(0, 10) + ".json";
+      a.click();
+      URL.revokeObjectURL(url);
+      toast("已导出数据，请妥善保存", "ok");
+    } catch (e) { toast(e.message || "导出失败", "err"); }
+  }
+
+  async function importData(file) {
+    try {
+      const text = await file.text();
+      const obj = JSON.parse(text);
+      const data = await api("/api/restore", { method: "POST", body: obj });
+      if (data.token) localStorage.setItem("lc_token", data.token);
+      toast("数据已恢复，正在刷新…", "ok");
+      setTimeout(() => location.reload(), 700);
+    } catch (e) { toast(e.message || "导入失败", "err"); }
   }
 
   async function doSync() {
