@@ -939,12 +939,14 @@ const MIME = {
   ".ico": "image/x-icon"
 };
 
+const STATIC_DIR = path.join(ROOT, "public");
+
 function serveStatic(req, res, pathname) {
   let file = pathname;
   if (pathname === "/") file = "/login.html";
   else if (pathname === "/app" || pathname === "/app/") file = "/app.html";
-  const filePath = path.normalize(path.join(ROOT, file));
-  if (!filePath.startsWith(ROOT)) { res.writeHead(403); return res.end("Forbidden"); }
+  const filePath = path.normalize(path.join(STATIC_DIR, file));
+  if (!filePath.startsWith(STATIC_DIR)) { res.writeHead(403); return res.end("Forbidden"); }
   fs.readFile(filePath, (err, data) => {
     if (err) {
       res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
