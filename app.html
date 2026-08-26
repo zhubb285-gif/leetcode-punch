@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LeetCode 打卡大屏</title>
+  <link rel="stylesheet" href="assets/css/style.css" />
+</head>
+<body>
+  <div class="bg-orbs" aria-hidden="true"><span></span><span></span><span></span></div>
+
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo">LC</div>
+      <div class="brand-text">
+        <h1>LeetCode 打卡大屏</h1>
+        <p>力扣同步 · 数据可视化 · 题解书库 · 求职搜索</p>
+      </div>
+    </div>
+    <div class="me-box">
+      <div class="me-avatar" id="meAvatar">?</div>
+      <span id="meName">…</span>
+      <button class="btn ghost" id="btnLogout">退出</button>
+    </div>
+  </header>
+
+  <nav class="tabs" id="tabs">
+    <button class="tab active" data-tab="mine">我的打卡</button>
+    <button class="tab" data-tab="board">数据大屏</button>
+    <button class="tab" data-tab="book">题解书库</button>
+    <button class="tab" data-tab="jobs">求职搜索</button>
+    <button class="tab" data-tab="profile">个人信息</button>
+  </nav>
+
+  <main class="stage">
+    <!-- ============ 我的打卡 ============ -->
+    <section class="panel active" id="tab-mine">
+      <div class="card">
+        <div class="my-head">
+          <h2 class="card-title">今日目标 <span class="muted" id="todayLabel"></span></h2>
+          <div class="light-row" id="myLight"></div>
+        </div>
+        <div class="progress-block" id="myProgress" style="margin-top:12px"></div>
+        <div class="stat-line" id="myStatLine"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h2>今日 AC 记录</h2><span class="muted" id="todayCount"></span></div>
+        <ul class="prob-list" id="todayList"></ul>
+      </div>
+    </section>
+
+    <!-- ============ 数据大屏 ============ -->
+    <section class="panel" id="tab-board">
+      <div class="kpi-grid" id="kpiGrid"></div>
+
+      <div class="card full" style="margin-bottom:14px">
+        <div class="card-head">
+          <h2>打卡热力墙</h2>
+          <div class="heat-controls">
+            <select id="heatYear"></select>
+            <select id="heatUser"><option value="all">全站</option></select>
+            <span class="heat-tip">悬浮查看当日明细 · 点击左侧用户可切换</span>
+          </div>
+        </div>
+        <div id="heatmap" class="heatmap"></div>
+      </div>
+
+      <div class="board-grid">
+        <div class="card">
+          <div class="card-head"><h2>用户榜</h2><span class="muted" id="boardSub"></span></div>
+          <div id="userBoard"></div>
+        </div>
+        <div>
+          <div class="card">
+            <div class="card-head"><h2>难度分布（全站）</h2></div>
+            <div class="dist-bars" id="distBars"></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h2 id="radarTitle">标签雷达</h2></div>
+            <svg id="radar" class="radar-svg" viewBox="0 0 420 380"></svg>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head"><h2>最近动态</h2><span class="muted">全站最近 50 条 AC</span></div>
+        <div class="feed" id="feed"></div>
+      </div>
+    </section>
+
+    <!-- ============ 题解书库 ============ -->
+    <section class="panel" id="tab-book">
+      <div class="card" style="margin-bottom:14px">
+        <div class="card-head">
+          <h2>LeetCode Cookbook 题解书库</h2>
+          <span class="muted">内容源：books.halfrost.com · 共 <b id="bookTotal">…</b> 页 · 章节内链接可在站内继续跳转</span>
+        </div>
+        <div class="prewarm-bar" id="prewarmBar" style="display:none">
+          <div class="pbar-track"><div class="pbar-fill easy" id="prewarmFill" style="width:0%"></div></div>
+          <span class="muted" id="prewarmText"></span>
+        </div>
+      </div>
+      <div class="book-layout">
+        <div class="book-tree">
+          <input class="book-search" id="bookSearch" placeholder="搜索章节 / 题目…" />
+          <div id="bookTree"><div class="empty">加载目录中…</div></div>
+        </div>
+        <div class="book-reader" id="bookReader">
+          <div class="br-head" id="brHead" style="display:none">
+            <button class="br-lang" id="brLang" title="切换显示语言">中文 <span class="muted">/ EN</span></button>
+            <span class="br-path" id="brPath"></span>
+          </div>
+          <div class="br-empty">← 从左侧目录选择一章开始阅读</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 求职搜索 ============ -->
+    <section class="panel" id="tab-jobs">
+      <div class="card">
+        <div class="card-head"><h2>计算机热门岗位 · 实时滚动</h2><span class="muted">悬浮暂停 · 点击岗位直接搜索</span></div>
+        <div class="jt-screen"><div class="jt-track" id="jobTrack"></div></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>岗位搜索</h2><span class="muted">输入关键词，一键跳转各大热门求职平台搜索页</span></div>
+        <div class="job-form">
+          <input id="jobKw" placeholder="岗位关键词，如：算法工程师 / Java后端 / 前端" />
+          <input id="jobCity" placeholder="城市（可选），如：北京 / 上海 / 深圳" />
+        </div>
+        <div class="job-chips" id="jobChips"></div>
+        <div class="job-grid" id="jobGrid"></div>
+      </div>
+    </section>
+
+    <!-- ============ 个人信息 ============ -->
+    <section class="panel" id="tab-profile">
+      <div class="profile-grid">
+        <div class="card">
+          <div class="card-head"><h2>账号信息</h2></div>
+          <div class="pf-row" style="margin-bottom:10px">
+            <label>名字</label><div class="pf-val" id="pfName">…</div>
+          </div>
+          <div class="pf-row" style="margin-bottom:10px">
+            <label>注册时间</label><div class="pf-val" id="pfCreated">…</div>
+          </div>
+          <div class="pf-row">
+            <label>力扣 ID（绑定后不可修改）</label>
+            <div class="pf-locked" id="pfLc"></div>
+          </div>
+          <div class="pf-actions" id="pfSyncArea"></div>
+          <p class="sync-note">每次同步自动拉取力扣最近 30 条提交（仅收录通过判题的，同题同日去重），并更新力扣账号总题数。同步越勤，热力墙越完整。</p>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>修改密码</h2></div>
+          <div class="pf-row" style="margin-bottom:10px">
+            <label>原密码</label><input class="inp" id="pwOld" type="password" />
+          </div>
+          <div class="pf-row" style="margin-bottom:10px">
+            <label>新密码（至少 4 位）</label><input class="inp" id="pwNew" type="password" />
+          </div>
+          <div class="pf-row">
+            <label>确认新密码</label><input class="inp" id="pwNew2" type="password" />
+          </div>
+          <div class="pf-actions">
+            <button class="btn primary" id="btnPw">修改密码</button>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div class="toast" id="toast"></div>
+
+  <script src="assets/js/charts.js"></script>
+  <script src="assets/js/dashboard.js"></script>
+</body>
+</html>

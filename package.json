@@ -1,0 +1,14 @@
+{
+  "name": "leetcode-punch-platform",
+  "version": "1.0.0",
+  "description": "LeetCode 双人对决打卡平台（零依赖 Node 后端）",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "private": true
+}

@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>登录 · LeetCode 打卡大屏</title>
+  <link rel="stylesheet" href="assets/css/style.css" />
+</head>
+<body class="login-body">
+  <div class="bg-orbs" aria-hidden="true"><span></span><span></span><span></span></div>
+
+  <div class="login-wrap">
+    <div class="login-card">
+      <div class="login-logo">LC</div>
+      <h1>LeetCode 打卡大屏</h1>
+      <p class="login-sub">每日打卡 · 力扣同步 · 可视化大屏</p>
+
+      <div class="login-tabs">
+        <button class="ltab active" data-mode="login">登录</button>
+        <button class="ltab" data-mode="register">注册</button>
+      </div>
+
+      <form id="loginForm">
+        <input id="f-name" placeholder="名字" autocomplete="username" required />
+        <input id="f-pass" type="password" placeholder="密码（至少 4 位）" autocomplete="current-password" required />
+        <input id="f-lc" placeholder="力扣 ID（注册时可选，之后可改）" style="display:none" />
+        <button class="btn primary login-btn" type="submit" id="loginBtn">登 录</button>
+        <p class="login-msg" id="loginMsg"></p>
+      </form>
+
+      <p class="login-foot">数据保存在服务器本地文件，无需数据库</p>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      // 已登录直接进入
+      if (localStorage.getItem("lc_token")) location.href = "/app";
+
+      let mode = "login";
+      const msg = document.getElementById("loginMsg");
+      const lcInput = document.getElementById("f-lc");
+      const btn = document.getElementById("loginBtn");
+
+      document.querySelectorAll(".ltab").forEach(function (t) {
+        t.addEventListener("click", function () {
+          mode = t.dataset.mode;
+          document.querySelectorAll(".ltab").forEach(function (x) { x.classList.toggle("active", x === t); });
+          lcInput.style.display = mode === "register" ? "" : "none";
+          btn.textContent = mode === "login" ? "登 录" : "注 册";
+          msg.textContent = "";
+        });
+      });
+
+      document.getElementById("loginForm").addEventListener("submit", async function (e) {
+        e.preventDefault();
+        const name = document.getElementById("f-name").value.trim();
+        const pass = document.getElementById("f-pass").value;
+        if (!name || !pass) return;
+        btn.disabled = true;
+        btn.textContent = "…";
+        try {
+          const body = mode === "login" ? { name: name, password: pass } : { name: name, password: pass, leetcodeId: lcInput.value.trim() };
+          const res = await fetch("/api/" + mode, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body)
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || "操作失败");
+          localStorage.setItem("lc_token", data.token);
+          localStorage.setItem("lc_user", JSON.stringify(data.user));
+          location.href = "/app";
+        } catch (err) {
+          msg.textContent = err.message;
+          btn.disabled = false;
+          btn.textContent = mode === "login" ? "登 录" : "注 册";
+        }
+      });
+    })();
+  </script>
+</body>
+</html>
