@@ -226,6 +226,20 @@ function auth(req) {
 async function handleApi(req, res, pathname, query) {
   const method = req.method;
 
+  /* ---- 健康检查/存储模式诊断 ---- */
+  if (pathname === "/api/health" && method === "GET") {
+    let kvOk = false;
+    if (USE_KV) {
+      try { await kvClient.set("health:ping", String(Date.now())); kvOk = true; } catch (e) { kvOk = false; }
+    }
+    return sendJson(res, 200, {
+      ok: true,
+      storage: USE_KV ? (kvOk ? "kv(读写正常)" : "kv(异常!写入失败)") : "file(Vercel上会丢数据!)",
+      users: db.users.length,
+      time: new Date().toISOString()
+    });
+  }
+
   /* ---- 注册 ---- */
   if (pathname === "/api/register" && method === "POST") {
     const { name, password, leetcodeId } = await readBody(req);
