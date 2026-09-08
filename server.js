@@ -17,12 +17,37 @@ const DATA_DIR = path.join(ROOT, "data");
 const DB_FILE = path.join(DATA_DIR, "db.json");
 
 /* ---------------- 存储后端：Vercel KV（云端）或本地文件（开发） ---------------- */
-// Vercel 绑定 KV store 后会自动注入 KV_REST_API_URL / KV_REST_API_TOKEN，
-// 此时用 @vercel/kv 做持久化；本地无该环境变量则回退到 data/db.json 文件。
-let kvClient = null;
-if (process.env.KV_REST_API_URL) {
-  try { kvClient = require("@vercel/kv"); } catch (e) { kvClient = null; }
+// Vercel 绑定 KV store（Upstash）后会自动注入 KV_REST_API_URL / KV_REST_API_TOKEN。
+// 这里用零依赖的 Upstash REST 客户端（原生 fetch），不依赖 @vercel/kv 的导出形态。
+// 本地无该环境变量则回退到 data/db.json 文件。
+function makeKvClient() {
+  const url = process.env.KV_REST_API_URL, tok = process.env.KV_REST_API_TOKEN;
+  if (!url || !tok) return null;
+  async function exec(path, opts) {
+    const r = await fetch(url + path, Object.assign({ headers: { Authorization: "Bearer " + tok } }, opts));
+    if (!r.ok) throw new Error("Upstash HTTP " + r.status);
+    const j = await r.json();
+    if (j.error) throw new Error("Upstash: " + j.error);
+    return j.result;
+  }
+  return {
+    async get(key) {
+      const raw = await exec("/get/" + encodeURIComponent(key));
+      if (raw === null || raw === undefined) return null;
+      try { return JSON.parse(raw); } catch (e) { return raw; }
+    },
+    async set(key, value) {
+      const body = typeof value === "string" ? value : JSON.stringify(value);
+      await exec("/set/" + encodeURIComponent(key), {
+        method: "POST",
+        headers: { Authorization: "Bearer " + tok, "Content-Type": "text/plain" },
+        body
+      });
+      return "OK";
+    }
+  };
 }
+const kvClient = makeKvClient();
 const USE_KV = !!kvClient;
 
 /* ---------------- 存储 ---------------- */
@@ -228,13 +253,20 @@ async function handleApi(req, res, pathname, query) {
 
   /* ---- 健康检查/存储模式诊断 ---- */
   if (pathname === "/api/health" && method === "GET") {
-    let kvOk = false;
+    let kvOk = false, kvErr = null;
     if (USE_KV) {
-      try { await kvClient.set("health:ping", String(Date.now())); kvOk = true; } catch (e) { kvOk = false; }
+      try {
+        const t0 = Date.now();
+        await kvClient.set("health:ping", String(Date.now()));
+        kvOk = true;
+        var kvMs = Date.now() - t0;
+      } catch (e) { kvErr = (e && e.message) || String(e); }
     }
     return sendJson(res, 200, {
       ok: true,
       storage: USE_KV ? (kvOk ? "kv(读写正常)" : "kv(异常!写入失败)") : "file(Vercel上会丢数据!)",
+      kvWriteMs: kvOk ? kvMs : null,
+      kvError: kvErr,
       users: db.users.length,
       time: new Date().toISOString()
     });
